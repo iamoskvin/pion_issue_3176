@@ -42,13 +42,15 @@ The .env file is loaded automatically using joho/godotenv.
 🚀 How to Run (Minimal Working Setup)
 
 1. Run signaling server (on VPS)
-   cd signaling
-   go run main.go
+   ```bash   
+   go run signaling/main.go
+   ```
    This starts a WebSocket server on SIGNALING_PORT (default: 8081 or as defined in .env).
 
 2. Run Go-based peer (on same VPS)
-   cd peer
-   go run main.go
+   ```bash   
+   go run peer/main.go
+   ```
    It connects to the signaling server on localhost:$SIGNALING_PORT.
 
 Make sure .env is present in the root with correct values.
