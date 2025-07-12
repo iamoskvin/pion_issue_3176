@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Browser Peer</title>
+  </head>
+  <body>
+    <h1>Browser Peer</h1>
+    <button onclick="startConnection()">Connect</button>
+    <pre id="log"></pre>
+
+    <script>
+      const peerId = "Z7H0LOIW6O2LH4U4";
+      const remotePeerId = "Z7H0LOIW6O2LH4U5";
+      const log = (msg) => {
+        console.log(msg);
+        document.getElementById("log").textContent += msg + "\n";
+      };
+
+      let pc = new RTCPeerConnection({
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      });
+
+      let dataChannel = null;
+      const wsParam = new URLSearchParams(location.search).get("ws");
+
+      if (!wsParam || !/^wss?:\/\/.+/.test(wsParam)) {
+        const err = `Missing or invalid ?ws= WebSocket URL param. Example: chrome.html?ws=ws://your-vps:8081/ws`;
+        document.body.innerHTML += `<pre style="color:red">${err}</pre>`;
+        throw new Error(err);
+      }
+
+      const socket = new WebSocket(wsParam);
+      let currentRemotePeerId = null;
+
+      // Setup ICE
+      pc.onicecandidate = (event) => {
+        console.log("icecand", event);
+        if (event.candidate && currentRemotePeerId) {
+          const candidateMsg = {
+            cmd: 2,
+            data: JSON.stringify({
+              from_peer_id: peerId,
+              to_peer_id: currentRemotePeerId,
+              event_name: "icecandidate",
+              data: JSON.stringify(event.candidate),
+            }),
+          };
+          socket.send(JSON.stringify(candidateMsg));
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        console.log("ICE state:", pc.iceConnectionState);
+      };
+
+      // Handle incoming DataChannel
+      pc.ondatachannel = (event) => {
+        log("Received data channel");
+        setupDataChannel(event.channel);
+      };
+
+      function setupDataChannel(channel) {
+        dataChannel = channel;
+
+        channel.onopen = () => {
+          log("Data channel open");
+          channel.send("hello from chrome");
+        };
+
+        channel.onmessage = (e) => {
+          log("Message: " + e.data);
+        };
+
+        channel.onerror = (e) => log("Data channel error: " + e);
+        channel.onclose = () => log("Data channel closed");
+      }
+
+      async function startConnection() {
+        currentRemotePeerId = remotePeerId;
+        dataChannel = pc.createDataChannel("dc");
+        setupDataChannel(dataChannel);
+
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        socket.send(
+          JSON.stringify({
+            cmd: 2,
+            data: JSON.stringify({
+              from_peer_id: peerId,
+              to_peer_id: currentRemotePeerId,
+              event_name: "offer",
+              data: JSON.stringify(pc.localDescription),
+            }),
+          })
+        );
+        log("Sent offer to " + currentRemotePeerId);
+      }
+
+      // WebSocket setup
+      socket.onopen = () => {
+        socket.send(
+          JSON.stringify({ cmd: 4, data: JSON.stringify({ peer_id: peerId }) })
+        );
+        log("Registered peer_id: " + peerId);
+      };
+
+      socket.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.cmd !== 2) return;
+
+        const { from_peer_id, event_name, data } = JSON.parse(msg.data);
+        currentRemotePeerId = from_peer_id;
+
+        log(`Signal event: ${event_name} from ${from_peer_id}`);
+
+        if (event_name === "offer") {
+          const offer = JSON.parse(data);
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          socket.send(
+            JSON.stringify({
+              cmd: 2,
+              data: JSON.stringify({
+                from_peer_id: peerId,
+                to_peer_id: from_peer_id,
+                event_name: "answer",
+                data: JSON.stringify(pc.localDescription),
+              }),
+            })
+          );
+          log("Sent answer");
+        }
+
+        if (event_name === "answer") {
+          const answer = JSON.parse(data);
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          log("Remote description set (answer)");
+        }
+
+        if (event_name === "icecandidate") {
+          const candidate = JSON.parse(data);
+          try {
+            await pc.addIceCandidate(candidate);
+          } catch (err) {
+            log("Failed to add ICE candidate: " + err);
+          }
+        }
+      };
+    </script>
+  </body>
+</html>
